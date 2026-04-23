@@ -1,0 +1,24 @@
+# Виртуальное окружение
+venv/
+env/
+.env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Сборка PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Временные файлы и логи
+*.log
+Temp/
+
+# Настройки IDE
+.vscode/
+.idea/
+
+archive/
