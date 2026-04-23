@@ -19,3 +19,5 @@ if __name__ == "__main__":
 
     app = MainWindow(root)
     root.mainloop()
+
+    # Дописал 1 строку в main
