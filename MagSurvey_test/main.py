@@ -13,7 +13,7 @@ if __name__ == "__main__":
         # Запущено как скрипт
         base_path = os.path.dirname(__file__)
 
-    icon_path = os.path.join(base_path, r'C:\Users\shulpin.mslvl\Downloads\fish.ico')
+    icon_path = os.path.join(base_path, 'src/fish.ico')
     if os.path.exists(icon_path):
         root.iconbitmap(icon_path)
 

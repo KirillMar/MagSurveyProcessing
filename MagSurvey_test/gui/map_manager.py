@@ -106,21 +106,34 @@ class MapManager:
         
         # ---------- Зум колёсиком ----------
         def on_scroll(event):
-            scale_factor = 1.1
+            scale_factor = 1.1          # плавный шаг
+            if event.button == 'up':
+                factor = 1 / scale_factor
+            else:
+                factor = scale_factor
+
             xlim = ax.get_xlim()
             ylim = ax.get_ylim()
-            xdata = event.xdata
-            ydata = event.ydata
-            if xdata is None or ydata is None:
-                return
-            if event.button == 'up':
-                new_width = (xlim[1] - xlim[0]) / scale_factor
-                new_height = (ylim[1] - ylim[0]) / scale_factor
+            width = xlim[1] - xlim[0]
+            height = ylim[1] - ylim[0]
+
+            # Курсор указывает на координаты xdata, ydata (могут быть None для шагов)
+            if event.xdata is None or event.ydata is None:
+                # Если данных нет, просто увеличиваем к центру
+                cx = (xlim[0] + xlim[1]) / 2
+                cy = (ylim[0] + ylim[1]) / 2
             else:
-                new_width = (xlim[1] - xlim[0]) * scale_factor
-                new_height = (ylim[1] - ylim[0]) * scale_factor
-            ax.set_xlim([xdata - new_width/2, xdata + new_width/2])
-            ax.set_ylim([ydata - new_height/2, ydata + new_height/2])
+                cx = event.xdata
+                cy = event.ydata
+
+            new_width = width * factor
+            new_height = height * factor
+
+            # Сохраняем пропорцию: точка под курсором остаётся на месте
+            ax.set_xlim([cx - new_width * (cx - xlim[0]) / width,
+                        cx + new_width * (xlim[1] - cx) / width])
+            ax.set_ylim([cy - new_height * (cy - ylim[0]) / height,
+                        cy + new_height * (ylim[1] - cy) / height])
             canvas.draw()
-        
+
         canvas.mpl_connect('scroll_event', on_scroll)
