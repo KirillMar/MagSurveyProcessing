@@ -192,13 +192,11 @@ class MainWindow:
     # Мини-карты
     def on_survey_map_click(self, event):
         if self.survey_data:
-            MapManager.create_interactive_map_window(self.master, "Интерактивная карта съёмки",
-                                                     MapManager.draw_survey_track, self.survey_data)
+            MapManager.create_interactive_survey_map(self.master, self.survey_data, self.output_dir.get())
 
     def on_nav_map_click(self, event):
         if self.nav_data:
-            MapManager.create_interactive_map_window(self.master, "Интерактивная карта навигации",
-                                                     MapManager.draw_nav_track, self.nav_coords_cache)
+            MapManager.create_interactive_nav_map(self.master, self.nav_coords_cache)
 
     def _on_survey_map_resize(self, event):
         if not event.widget.winfo_exists():
@@ -305,16 +303,20 @@ class MainWindow:
         def task():
             try:
                 corr_folder = Path(self.output_dir.get())
-                stats_filtered = save_survey_with_corrections(self.survey_data, str(corr_folder),
-                                                              self.mode.get(), self.correction_file.get(),
-                                                              keep_only_matched=False)
+                # пусть функция возвращает кортеж (статистика, обновлённые данные)
+                stats_filtered, corrected_data = save_survey_with_corrections(
+                    self.survey_data, str(corr_folder),
+                    self.mode.get(), self.correction_file.get(),
+                    keep_only_matched=False
+                )
+                self.survey_data = corrected_data          # ← обновляем данные в памяти
                 self.master.after(0, lambda: self.remove_empty_btn.config(state=tk.NORMAL))
                 msg = (f"Поправки применены.\n"
-                       f"Всего строк: {stats_filtered['total_rows']}\n"
-                       f"Строк с вариацией: {stats_filtered['matched_rows']}\n"
-                       f"Удалено строк без вариации: {stats_filtered['removed_rows']}\n"
-                       f"Удалено пустых листов: {stats_filtered['sheets_removed']}\n"
-                       f"Файлы сохранены в: {corr_folder}")
+                    f"Всего строк: {stats_filtered['total_rows']}\n"
+                    f"Строк с вариацией: {stats_filtered['matched_rows']}\n"
+                    f"Удалено строк без вариации: {stats_filtered['removed_rows']}\n"
+                    f"Удалено пустых листов: {stats_filtered['sheets_removed']}\n"
+                    f"Файлы сохранены в: {corr_folder}")
                 self._add_statistics(msg)
                 self.master.after(0, messagebox.showinfo, "Готово", msg)
             except Exception as e:
@@ -354,7 +356,7 @@ class MainWindow:
 
         threading.Thread(target=task, daemon=True).start()
 
-    # ---------------------------------------------------------------------
+        # ---------------------------------------------------------------------
     # Статистика и ошибки
     def _add_statistics(self, message):
         self.statistics_history.append(message)
