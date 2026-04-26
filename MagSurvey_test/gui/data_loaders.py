@@ -39,7 +39,7 @@ class DataLoaders:
                 self.mw.errors = stats.get('errors', [])
                 self.mw.master.after(0, self._update_survey_preview, data, stats)
             except Exception as e:
-                self.mw.master.after(0, messagebox.showerror, "Ошибка", str(e))
+                self.mw.master.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
             finally:
                 self.mw.master.after(0, self.mw.hide_loading)
 
@@ -65,7 +65,7 @@ class DataLoaders:
                         if col in ('lon', 'x', 'lat', 'y'):
                             df[col] = pd.to_numeric(df[col], errors='coerce')
                     sheets[sheet_name] = df
-                    
+
                 self.mw.survey_data = sheets
                 self.mw._cache_original()          # <-- сохраняем оригинал для левой карты
                 self.mw.errors = []
@@ -179,14 +179,32 @@ class DataLoaders:
 
         def task():
             try:
-                # Быстро получаем только имена листов
+                from logic.correction_processor import read_correction_sheet_from_df
+
                 xl = pd.ExcelFile(file_path, engine='openpyxl')
-                sheets = xl.sheet_names
-                self.mw.master.after(0, lambda: messagebox.showinfo(
-                    "Вариации", f"Файл вариаций загружен.\nНайдено листов: {len(sheets)}"))
+                corr_sheet = 'Лист1' if 'Лист1' in xl.sheet_names else xl.sheet_names[0]
+                corr_df = xl.parse(corr_sheet)
+                var_df = read_correction_sheet_from_df(corr_df)
+                self.mw.master.after(0, self._on_correction_loaded, var_df)
             except Exception as e:
-                self.mw.master.after(0, messagebox.showerror, "Ошибка", f"Не удалось прочитать файл вариаций:\n{e}")
+                self.mw.master.after(0, messagebox.showerror, "Ошибка", f"Не удалось обработать файл вариаций:\n{e}")
             finally:
                 self.mw.master.after(0, self.mw.hide_loading)
 
         threading.Thread(target=task, daemon=True).start()
+    
+    def _on_correction_loaded(self, var_df):
+        """Сохраняет данные вариаций, активирует кнопку графика и показывает сообщение."""
+        self.mw.var_df = var_df
+        # Активируем кнопку «📊 Вариации»
+        self.mw.var_graph_btn.config(state=tk.NORMAL)
+        
+        # Количество уникальных дат
+        unique_dates = var_df['datetime'].dt.date.nunique()
+        total_records = len(var_df)
+        messagebox.showinfo(
+            "Вариации загружены",
+            f"Файл вариаций обработан.\n"
+            f"Уникальных дат: {unique_dates}\n"
+            f"Всего записей: {total_records}"
+        )

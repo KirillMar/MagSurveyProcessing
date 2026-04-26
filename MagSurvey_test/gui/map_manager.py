@@ -30,7 +30,6 @@ class MapManager:
             ax.tick_params(axis='both', labelsize=7)
             ax.ticklabel_format(useOffset=False, style='plain')   # ← отключаем смещение
             ax.grid(True)
-            ax.figure.tight_layout()
         else:
             ax.text(0.5, 0.5, 'В данных нет координат', ha='center', va='center', transform=ax.transAxes)
 
@@ -54,7 +53,6 @@ class MapManager:
             ax.grid(True)
         else:
             ax.text(0.5, 0.5, 'Не удалось извлечь координаты', ha='center', va='center', transform=ax.transAxes)
-        ax.figure.tight_layout()
 
     @staticmethod
     def draw_assigned_track(ax, survey_data):
@@ -124,7 +122,7 @@ class MapManager:
             # Гибкий spacer, чтобы прижать кнопку вправо
             ttk.Frame(top_frame).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-            polygon_tool = PolygonTool(ax, canvas, data, output_dir)
+            polygon_tool = PolygonTool(ax, canvas, data, output_dir, main_window=parent if hasattr(parent, "_add_statistics") else None)
             btn_text = tk.StringVar(value="Выделить полигон")
 
             def toggle_polygon():

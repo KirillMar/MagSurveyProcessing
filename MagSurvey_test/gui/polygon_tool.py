@@ -4,7 +4,7 @@ from pathlib import Path
 from tkinter import simpledialog, messagebox
 
 class PolygonTool:
-    def __init__(self, ax, canvas, survey_data, output_dir):
+    def __init__(self, ax, canvas, survey_data, output_dir, main_window=None):
         self.ax = ax
         self.canvas = canvas
         self.survey_data = survey_data
@@ -16,6 +16,7 @@ class PolygonTool:
         self.scatter_first = None
         self._cid_click = None
         self._cid_key = None
+        self.main_window = main_window
 
     def activate(self):
         if self.active:
@@ -135,7 +136,8 @@ class PolygonTool:
         for sheet, df in self.survey_data.items():
             if 'lon' not in df.columns or 'lat' not in df.columns:
                 continue
-            mask = df.apply(lambda r: self._point_in_polygon((r['lon'], r['lat']), polygon_vertices), axis=1)
+            coords = df[['lon', 'lat']].values
+            mask = [self._point_in_polygon(pt, polygon_vertices) for pt in coords]
             fdf = df[mask]
             if not fdf.empty:
                 filtered[sheet] = fdf
@@ -152,7 +154,27 @@ class PolygonTool:
                 fdf.to_excel(writer, sheet_name=sheet, index=False)
 
         messagebox.showinfo("Успех", f"Сохранено: {filepath}\nЛистов: {len(filtered)}")
-        self._clear_temp()
+        # Возвращаем фокус на холст и поднимаем окно
+        self.canvas.get_tk_widget().focus_set()
+        win = self.ax.figure.canvas.get_tk_widget().winfo_toplevel()
+        win.lift()
+        win.focus_force()
+        self.deactivate()
+
+        self.canvas.mpl_disconnect(self._cid_click)
+        self.canvas.mpl_disconnect(self._cid_key)
+
+        self.canvas.widgetlock.release(self.canvas)
+        self.canvas.draw_idle()
+
+        if hasattr(self.main_window, "_add_statistics"):
+            stats_msg = (f"Полигон '{name}' сохранён: {filepath}\n"
+                         f"Вершин: {len(polygon_vertices)}, точек внутри: {sum(len(v) for v in filtered.values())}")
+            self.main_window._add_statistics(stats_msg)
+
+        win = self.ax.figure.canvas.get_tk_widget().winfo_toplevel()
+        win.after(50, lambda: win.focus_force())
+        win.after(50, lambda: win.grab_release())
 
     @staticmethod
     def _point_in_polygon(point, polygon):
@@ -163,7 +185,10 @@ class PolygonTool:
         for i in range(n):
             xi, yi = polygon[i]
             xj, yj = polygon[j]
-            if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
-                inside = not inside
+            if (yi > y) != (yj > y):
+                if yj != yi:
+                    x_intersect = (xj - xi) * (y - yi) / (yj - yi) + xi
+                    if x < x_intersect:
+                        inside = not inside
             j = i
         return inside

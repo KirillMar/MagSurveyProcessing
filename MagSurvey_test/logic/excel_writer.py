@@ -80,21 +80,8 @@ def save_survey_excels(survey_data, output_dir, mode, nav_data=None, keep_only_m
     return stats
 
 
-def save_survey_with_corrections(survey_data, output_dir, mode, correction_file, keep_only_matched=False, base_name="survey"):
-    """
-    Применяет поправки (вариации) к данным съёмки и сохраняет результат.
-    
-    Args:
-        survey_data: словарь {sheet_name: DataFrame}
-        output_dir: папка для сохранения
-        mode: 'with_v1', 'without_v1', 'excel'
-        correction_file: путь к файлу вариаций
-        keep_only_matched: удалять ли строки без вариаций
-        base_name: базовое имя файла
-    
-    Returns:
-        tuple: (статистика, обновлённые данные)
-    """
+def save_survey_with_corrections(survey_data, output_dir, mode, var_df,
+                                 keep_only_matched=False, base_name="survey"):
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     stats = {'total_rows': 0, 'matched_rows': 0, 'removed_rows': 0, 'sheets_removed': 0}
@@ -103,71 +90,35 @@ def save_survey_with_corrections(survey_data, output_dir, mode, correction_file,
     filename = f"{base_name}_{suffix}_corrected.xlsx" if suffix else f"{base_name}_corrected.xlsx"
     save_path = out_path / filename
 
-    try:
-        xl_corr = pd.ExcelFile(correction_file)
-        available_sheets = xl_corr.sheet_names
-    except Exception as e:
-        raise ValueError(f"Ошибка открытия файла вариаций: {e}")
-
     sheets_to_save = {}
-    correction_cache = {}
-
     for sheet_name, df in survey_data.items():
-        # Определяем лист вариаций
-        if len(sheet_name) >= 6:
-            date_prefix = sheet_name[:6]
-            year_s = "20" + date_prefix[0:2]
-            month_s = date_prefix[2:4]
-            day_s = date_prefix[4:6]
-            corr_sheet = f"{int(day_s):02d}.{int(month_s):02d}.{year_s}"
-        else:
-            corr_sheet = sheet_name
-
-        if corr_sheet not in available_sheets:
-            print(f"Для листа {sheet_name} лист вариаций '{corr_sheet}' не найден.")
-            # Всё равно сохраняем лист без вариаций
-            stats['total_rows'] += len(df)
-            sheets_to_save[sheet_name] = df.copy()
-            continue
-
-        # Получаем словарь вариаций (из кеша или читаем)
-        if corr_sheet not in correction_cache:
-            try:
-                corr_df = xl_corr.parse(corr_sheet)
-                var_dict = read_correction_sheet_from_df(corr_df, corr_sheet)
-                correction_cache[corr_sheet] = var_dict
-            except Exception as e:
-                print(f"Ошибка чтения листа вариаций '{corr_sheet}': {e}")
-                stats['total_rows'] += len(df)
-                sheets_to_save[sheet_name] = df.copy()
-                continue
-        else:
-            var_dict = correction_cache[corr_sheet]
-
-        df_result, matched = apply_correction_to_df(df, var_dict)
+        df_result, matched = apply_correction_to_df(df, var_df)
         stats['total_rows'] += len(df_result)
         stats['matched_rows'] += matched
 
         if keep_only_matched:
             before = len(df_result)
-            if 'var' in df_result.columns:
-                df_result = df_result.dropna(subset=['var'])
-            if 'X' in df_result.columns and 'Y' in df_result.columns:
-                df_result = df_result.dropna(subset=['X', 'Y'])
+            for col in ['var']:
+                if col in df_result.columns:
+                    df_result = df_result.dropna(subset=[col])
+            for col in ['X', 'Y']:
+                if col in df_result.columns:
+                    df_result = df_result.dropna(subset=[col])
             stats['removed_rows'] += before - len(df_result)
             if len(df_result) == 0:
                 stats['sheets_removed'] += 1
                 continue
-
         sheets_to_save[sheet_name] = df_result
 
     if sheets_to_save:
         with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
             for sh_name, sh_df in sheets_to_save.items():
                 sh_df.to_excel(writer, sheet_name=sh_name, index=False)
+        print(f"✔ Сохранено: {save_path}")
+    else:
+        print("⚠️ Нет данных для сохранения после коррекции")
 
     return stats, sheets_to_save
-
 
 def save_filtered_survey(survey_data, output_dir, mode, base_name="survey"):
     """

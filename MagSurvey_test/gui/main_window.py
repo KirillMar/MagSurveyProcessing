@@ -26,13 +26,15 @@ class MainWindow:
         self.nav_map_figure = None
         self.nav_map_canvas = None
         self.nav_coords_cache = None
+        self.var_df = None
+        self.survey_data_corrected = None
 
         self.survey_path = tk.StringVar()
         self.nav_path = tk.StringVar()
         self.correction_file = tk.StringVar()
         self.mode = tk.StringVar(value="with_v1")
-        self.survey_data = None               # обработанные данные (присвоенные координаты)
-        self.survey_data_original = None      # исходные данные с lon/lat
+        self.survey_data = None
+        self.survey_data_original = None
         self.nav_data = None
         self.output_dir = tk.StringVar()
         self.coordinates_assigned = False
@@ -46,7 +48,6 @@ class MainWindow:
         self.data_loaders = DataLoaders(self)
         self.create_widgets()
 
-        # Восстановление оверлея при разворачивании окна
         self.master.bind("<Map>", self._on_window_map)
 
     def create_widgets(self):
@@ -97,7 +98,8 @@ class MainWindow:
         ttk.Button(entry_frame3, text="Обзор...", command=self.browse_correction).pack(side=tk.LEFT)
         ttk.Button(entry_frame3, text="📁", width=3,
                    command=lambda: open_folder(str(Path(self.correction_file.get()).parent) if self.correction_file.get() else "")).pack(side=tk.LEFT, padx=2)
-
+        self.var_graph_btn = ttk.Button(entry_frame3, text="📊 Вариации", command=self.show_var_graph, state=tk.DISABLED)
+        self.var_graph_btn.pack(side=tk.LEFT, padx=5)
         frame_paths.columnconfigure(1, weight=1)
 
         # Мини-карты
@@ -131,7 +133,7 @@ class MainWindow:
         self.assign_btn = ttk.Button(actions_left, text="Присвоить координаты",
                                      command=self.process_with_coordinates, state=tk.DISABLED)
         self.assign_btn.pack(side=tk.LEFT, padx=5)
-        self.correct_btn = ttk.Button(actions_left, text="Ввод поправок",
+        self.correct_btn = ttk.Button(actions_left, text="Ввести поправки",
                                       command=self.process_corrections, state=tk.DISABLED)
         self.correct_btn.pack(side=tk.LEFT, padx=5)
 
@@ -152,12 +154,11 @@ class MainWindow:
             self.loading_overlay.show(text)
 
     def hide_loading(self):
-        if self.loading_overlay_shown:
-            self.loading_overlay_shown = False
-            self.loading_overlay.hide()
+        self.loading_overlay_shown = False
+        self.loading_overlay.hide()
+        self.master.update_idletasks()
 
     def _on_window_map(self, event):
-        """Восстанавливает оверлей, если он был показан."""
         if self.loading_overlay_shown:
             self.loading_overlay.show()
             if self.loading_overlay.overlay:
@@ -165,28 +166,39 @@ class MainWindow:
 
     # ---------------------------------------------------------------------
     # Выбор путей
+    def _ensure_output_dir(self, base_path):
+        p = Path(base_path)
+        if p.name.lower() == 'результаты':
+            self.output_dir.set(str(p))
+        else:
+            self.output_dir.set(str(p / 'Результаты'))
+
     def browse_output(self):
         path = filedialog.askdirectory(title="Выберите папку для сохранения результатов")
         if path:
-            self.output_dir.set(str(Path(path) / "Результаты"))
+            self._ensure_output_dir(path)
 
     def browse_survey(self):
         if self.mode.get() == "excel":
-            path = filedialog.askopenfilename(title="Выберите Excel-файл съёмки",
-                                              filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")])
+            path = filedialog.askopenfilename(
+                title="Выберите Excel-файл съёмки",
+                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+            )
             if path:
+                self._reset_survey_state()
                 self.survey_path.set(path)
                 parent = Path(path).parent
                 if not self.output_dir.get():
-                    self.output_dir.set(str(parent / "Результаты"))
+                    self._ensure_output_dir(parent)
                 self.data_loaders.load_survey()
         else:
             path = filedialog.askdirectory(title="Данные съёмки")
             if path:
+                self._reset_survey_state()
                 self.survey_path.set(path)
                 parent = Path(path).parent
                 if not self.output_dir.get():
-                    self.output_dir.set(str(parent / "Результаты"))
+                    self._ensure_output_dir(parent)
                 self.data_loaders.load_survey()
 
     def browse_navigation(self):
@@ -205,19 +217,23 @@ class MainWindow:
     # ---------------------------------------------------------------------
     # Мини-карты
     def on_survey_map_click(self, event):
-        """Открыть интерактивную карту исходного трека."""
         if self.survey_data_original:
             MapManager.create_interactive_survey_map(self.master, self.survey_data_original, self.output_dir.get())
 
     def on_nav_map_click(self, event):
-        if self.coordinates_assigned and self.survey_data:
+        # Проверяем, есть ли в survey_data реальные координаты X/Y
+        has_real_coords = self.survey_data and any(
+            ('X' in df.columns and 'Y' in df.columns) or ('x' in df.columns and 'y' in df.columns)
+            for df in self.survey_data.values()
+        )
+        if has_real_coords:
             MapManager._create_window(
                 self.master,
                 "Присвоенные координаты",
                 MapManager.draw_assigned_track,
                 self.survey_data,
                 self.output_dir.get(),
-                enable_polygon=True
+                enable_polygon=False
             )
         elif self.nav_coords_cache:
             MapManager.create_interactive_nav_map(self.master, self.nav_coords_cache)
@@ -241,11 +257,104 @@ class MainWindow:
         self.nav_map_canvas.draw_idle()
 
     def _cache_original(self):
-        """Сохраняет копию survey_data в survey_data_original."""
         if self.survey_data:
             self.survey_data_original = {
                 sheet: df.copy() for sheet, df in self.survey_data.items()
             }
+
+    def _reset_survey_state(self):
+        self.survey_data_corrected = None
+        self.coordinates_assigned = False
+        self.survey_data_original = None
+
+    def show_var_graph(self):
+        if self.var_df is None or self.var_df.empty:
+            messagebox.showinfo("Вариации", "Нет данных для отображения.")
+            return
+        
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+        from matplotlib.figure import Figure
+        
+        win = tk.Toplevel(self.master)
+        win.title("График вариаций МВС")
+        win.geometry("800x500")
+        
+        fig = Figure(figsize=(8, 5), dpi=100)
+        ax = fig.add_subplot(111)
+        
+        var_df = self.var_df.copy()
+        var_df['date'] = var_df['datetime'].dt.date
+        for date, group in var_df.groupby('date'):
+            ax.plot(group['datetime'], group['var'], linewidth=0.8, marker='', linestyle='-')
+        
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        ax.set_xlabel('Время')
+        ax.set_ylabel('Вариация (нТл)')
+        ax.set_title('Вариации магнитного поля')
+        ax.tick_params(axis='x', rotation=45)
+        
+        ax.grid(True, linestyle='--', alpha=0.4)
+        
+        normal_field = self.var_df.attrs.get('normal_field', 0) if hasattr(self.var_df, 'attrs') else 0
+        ax.text(0.98, 0.95, f"Нормальное поле: {normal_field:.0f} нТл",
+                transform=ax.transAxes, ha='right', va='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        fig.tight_layout()
+        
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        canvas.draw()
+        
+        toolbar = NavigationToolbar2Tk(canvas, win)
+        toolbar.update()
+        toolbar.pack(side=tk.BOTTOM, fill=tk.X)
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        
+        pan_data = {'pressed': False, 'x': None, 'y': None}
+        
+        def on_press(event):
+            if event.inaxes != ax or event.button != 1:
+                return
+            pan_data['pressed'] = True
+            pan_data['x'] = event.xdata
+            pan_data['y'] = event.ydata
+        
+        def on_motion(event):
+            if not pan_data['pressed'] or event.inaxes != ax:
+                return
+            if pan_data['x'] is None or pan_data['y'] is None:
+                return
+            dx = event.xdata - pan_data['x']
+            dy = event.ydata - pan_data['y']
+            xlim = ax.get_xlim()
+            ylim = ax.get_ylim()
+            ax.set_xlim(xlim[0] - dx, xlim[1] - dx)
+            ax.set_ylim(ylim[0] - dy, ylim[1] - dy)
+            canvas.draw()
+        
+        def on_release(event):
+            pan_data['pressed'] = False
+        
+        def on_scroll(event):
+            if event.inaxes != ax:
+                return
+            scale = 1.1 if event.button == 'down' else 0.9
+            xlim = ax.get_xlim()
+            ylim = ax.get_ylim()
+            w, h = xlim[1] - xlim[0], ylim[1] - ylim[0]
+            cx = event.xdata if event.xdata else (xlim[0] + xlim[1]) / 2
+            cy = event.ydata if event.ydata else (ylim[0] + ylim[1]) / 2
+            nw, nh = w * scale, h * scale
+            ax.set_xlim(cx - nw * (cx - xlim[0]) / w, cx + nw * (xlim[1] - cx) / w)
+            ax.set_ylim(cy - nh * (cy - ylim[0]) / h, cy + nh * (ylim[1] - cy) / h)
+            canvas.draw()
+        
+        canvas.mpl_connect('button_press_event', on_press)
+        canvas.mpl_connect('motion_notify_event', on_motion)
+        canvas.mpl_connect('button_release_event', on_release)
+        canvas.mpl_connect('scroll_event', on_scroll)
+
     # ---------------------------------------------------------------------
     # Обработка данных
     def _has_coordinates(self):
@@ -272,52 +381,52 @@ class MainWindow:
                 return
 
         self.show_loading("Присвоение координат и удаление пустых строк...")
+        self._cache_original()
         self.master.after(100, lambda: threading.Thread(target=self._process_coord_task, daemon=True).start())
 
     def _process_coord_task(self):
         try:
             coord_folder = Path(self.output_dir.get())
 
-            # 1. Сохраняем исходные данные, если ещё не сохранены
             if self.survey_data_original is None:
                 self.survey_data_original = {
                     sheet: df.copy() for sheet, df in self.survey_data.items()
                 }
 
-            # 2. Присвоение координат
             stats_coord = save_survey_excels(
                 self.survey_data, str(coord_folder), self.mode.get(),
                 nav_data=self.nav_data, keep_only_matched=False,
                 base_name=self._get_base_name()
             )
+            nav_cache = {}  # словарь для навигационного текста -> coord_dict
             for sheet_name, df in list(self.survey_data.items()):
                 nav_text = self._get_nav_text(sheet_name)
                 if nav_text:
-                    try:
-                        coord_dict = parse_navigation_text(nav_text)
+                    if nav_text not in nav_cache:
+                        try:
+                            nav_cache[nav_text] = parse_navigation_text(nav_text)
+                        except Exception as e:
+                            print(f"Ошибка парсинга: {e}")
+                            continue
+                    coord_dict = nav_cache.get(nav_text)
+                    if coord_dict:
                         self.survey_data[sheet_name] = add_coordinates_to_df(df, coord_dict)
-                    except Exception as e:
-                        print(f"Не удалось добавить координаты в {sheet_name}: {e}")
 
-            # 3. Удаление строк без координат
             stats_filtered, _ = save_filtered_survey(
                 self.survey_data, str(coord_folder), self.mode.get(),
                 base_name=self._get_base_name()
             )
             self.coordinates_assigned = True
 
-            # 4. Загружаем из итогового файла и переименовываем X->lon, Y->lat для карты
             filtered_file = coord_folder / f"{self._get_base_name()}_{'V1' if self.mode.get() == 'with_v1' else ''}_filtered.xlsx"
             if filtered_file.exists():
                 xl = pd.ExcelFile(filtered_file)
                 new_data = {}
                 for sheet in xl.sheet_names:
                     df = xl.parse(sheet)
-                    
                     for col in df.columns:
                         if col.lower() in ('lon', 'x', 'lat', 'y'):
                             df[col] = pd.to_numeric(df[col], errors='coerce')
-
                     new_data[sheet] = df
                 self.survey_data = new_data
 
@@ -337,7 +446,7 @@ class MainWindow:
             self.master.after(0, self._update_nav_map)
             self.master.after(0, lambda: messagebox.showinfo("Готово", msg))
         except Exception as e:
-            self.master.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
+            self.master.after(0, lambda err=e: messagebox.showerror("Ошибка", str(err)))
         finally:
             self.master.after(0, self.hide_loading)
 
@@ -348,14 +457,22 @@ class MainWindow:
         ax = self.nav_map_figure.add_subplot(111)
 
         all_x, all_y = [], []
-        if self.survey_data:
-            for df in self.survey_data.values():
-                if 'X' in df.columns:
-                    all_x.extend(pd.to_numeric(df['X'], errors='coerce').dropna())
-                    all_y.extend(pd.to_numeric(df['Y'], errors='coerce').dropna())
-                elif 'lon' in df.columns:
-                    all_x.extend(pd.to_numeric(df['lon'], errors='coerce').dropna())
-                    all_y.extend(pd.to_numeric(df['lat'], errors='coerce').dropna())
+        data = self.survey_data_corrected or self.survey_data
+
+        if data:
+            for df in data.values():
+                xcol = ycol = None
+                for col in df.columns:
+                    cl = col.lower()
+                    if cl in ('lon', 'x'):
+                        xcol = col
+                    elif cl in ('lat', 'y'):
+                        ycol = col
+                if xcol and ycol:
+                    x_vals = pd.to_numeric(df[xcol], errors='coerce').dropna()
+                    y_vals = pd.to_numeric(df[ycol], errors='coerce').dropna()
+                    all_x.extend(x_vals)
+                    all_y.extend(y_vals)
 
         if all_x:
             ax.plot(all_x, all_y, 'g.', markersize=1, linestyle='None')
@@ -381,66 +498,59 @@ class MainWindow:
         if not self.output_dir.get():
             messagebox.showwarning("Предупреждение", "Выберите папку для сохранения")
             return
-        if not self._has_coordinates():
-            messagebox.showwarning("Предупреждение", "Сначала присвойте координаты")
-            return
 
         self.show_loading("Ввод поправок...")
         self.master.after(100, lambda: threading.Thread(target=self._process_corr_task, daemon=True).start())
 
     def _process_corr_task(self):
+        msg = None
         try:
             corr_folder = Path(self.output_dir.get())
 
-            # Загружаем отфильтрованные данные (_filtered), если есть
             filtered_file = corr_folder / f"{self._get_base_name()}_{'V1' if self.mode.get() == 'with_v1' else ''}_filtered.xlsx"
             if filtered_file.exists():
                 xl = pd.ExcelFile(filtered_file)
                 filtered_data = {}
                 for sheet in xl.sheet_names:
                     df = xl.parse(sheet)
-                    # Приводим координаты к числам
                     for col in df.columns:
                         if col.lower() in ('lon', 'x', 'lat', 'y'):
                             df[col] = pd.to_numeric(df[col], errors='coerce')
                     filtered_data[sheet] = df
             else:
-                # На случай, если filtered ещё не создан
                 filtered_data = self.survey_data
 
-            # Применяем поправки к отфильтрованным данным
+            if self.var_df is None or self.var_df.empty:
+                raise ValueError("Сначала загрузите файл вариаций")
+
             stats_filtered, corrected_data = save_survey_with_corrections(
                 filtered_data,
                 str(corr_folder),
                 self.mode.get(),
-                self.correction_file.get(),
+                self.var_df,
                 keep_only_matched=True,
                 base_name=self._get_base_name()
             )
 
-            # Обновляем данные для правой мини-карты
-            self.survey_data = corrected_data
-
+            self.survey_data_corrected = corrected_data
             self.master.after(0, self._update_nav_map)
 
-            msg = (f"Поправки применены.\n"
+            msg = (
+                f"Поправки применены.\n"
                 f"Всего строк: {stats_filtered['total_rows']}\n"
                 f"Строк с вариацией: {stats_filtered['matched_rows']}\n"
-                f"Удалено строк без вариации: {stats_filtered['removed_rows']}\n"
-                f"Удалено пустых листов: {stats_filtered['sheets_removed']}\n"
-                f"Файлы сохранены в: {corr_folder}")
-
+            )
             self._add_statistics(msg)
             self.master.after(0, lambda: messagebox.showinfo("Готово", msg))
+
         except Exception as e:
-            self.master.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
+            self.master.after(0, lambda err=e: messagebox.showerror("Ошибка", str(err)))
         finally:
             self.master.after(0, self.hide_loading)
 
     # ---------------------------------------------------------------------
     # Вспомогательные методы
     def _get_nav_text(self, sheet_name):
-        """Возвращает текст навигации для указанного листа."""
         if not self.nav_data:
             return None
         if len(sheet_name) >= 6:
@@ -454,7 +564,6 @@ class MainWindow:
             return self.nav_data.get(sheet_name)
 
     def _get_base_name(self):
-        """Базовое имя файла в зависимости от режима."""
         if self.mode.get() == "excel":
             return Path(self.survey_path.get()).stem
         return "survey"
