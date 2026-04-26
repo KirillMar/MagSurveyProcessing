@@ -3,16 +3,31 @@ from pathlib import Path
 from logic.coordinate_merger import parse_navigation_text, add_coordinates_to_df
 from logic.correction_processor import read_correction_sheet_from_df, apply_correction_to_df
 
-def save_survey_excels(survey_data, output_dir, mode, nav_data=None, keep_only_matched=False):
+
+def save_survey_excels(survey_data, output_dir, mode, nav_data=None, keep_only_matched=False, base_name="survey"):
+    """
+    Сохраняет данные съёмки в Excel.
+    
+    Args:
+        survey_data: словарь {sheet_name: DataFrame}
+        output_dir: папка для сохранения
+        mode: 'with_v1', 'without_v1', 'excel'
+        nav_data: данные навигации (опционально)
+        keep_only_matched: удалять ли строки без координат
+        base_name: базовое имя файла (для режима Excel — имя исходного файла)
+    
+    Returns:
+        dict: статистика обработки
+    """
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     stats = {'total_rows': 0, 'matched_rows': 0, 'removed_rows': 0, 'sheets_removed': 0}
 
     suffix = 'V1' if mode == 'with_v1' else ''
     if nav_data is None:
-        filename = f"survey_{suffix}_source.xlsx"
+        filename = f"{base_name}_{suffix}_source.xlsx" if suffix else f"{base_name}_source.xlsx"
     else:
-        filename = f"survey_{suffix}_coords.xlsx"
+        filename = f"{base_name}_{suffix}_coords.xlsx" if suffix else f"{base_name}_coords.xlsx"
     save_path = out_path / filename
 
     sheets_to_save = {}
@@ -37,7 +52,7 @@ def save_survey_excels(survey_data, output_dir, mode, nav_data=None, keep_only_m
         df_result = df.copy()
         if coord_dict is not None:
             df_result = add_coordinates_to_df(df_result, coord_dict)
-            matched = df_result['X'].notna().sum()
+            matched = df_result['X'].notna().sum() if 'X' in df_result.columns else 0
         else:
             matched = 0
 
@@ -47,7 +62,8 @@ def save_survey_excels(survey_data, output_dir, mode, nav_data=None, keep_only_m
 
         if keep_only_matched and coord_dict is not None:
             before = len(df_result)
-            df_result = df_result.dropna(subset=['X', 'Y'], how='all')
+            if 'X' in df_result.columns and 'Y' in df_result.columns:
+                df_result = df_result.dropna(subset=['X', 'Y'], how='all')
             after = len(df_result)
             stats['removed_rows'] += before - after
             if after == 0:
@@ -64,17 +80,27 @@ def save_survey_excels(survey_data, output_dir, mode, nav_data=None, keep_only_m
     return stats
 
 
-def save_survey_with_corrections(survey_data, output_dir, mode, correction_file, keep_only_matched=False):
-    from pathlib import Path
-    import pandas as pd
-    from logic.correction_processor import read_correction_sheet_from_df, apply_correction_to_df
-
+def save_survey_with_corrections(survey_data, output_dir, mode, correction_file, keep_only_matched=False, base_name="survey"):
+    """
+    Применяет поправки (вариации) к данным съёмки и сохраняет результат.
+    
+    Args:
+        survey_data: словарь {sheet_name: DataFrame}
+        output_dir: папка для сохранения
+        mode: 'with_v1', 'without_v1', 'excel'
+        correction_file: путь к файлу вариаций
+        keep_only_matched: удалять ли строки без вариаций
+        base_name: базовое имя файла
+    
+    Returns:
+        tuple: (статистика, обновлённые данные)
+    """
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     stats = {'total_rows': 0, 'matched_rows': 0, 'removed_rows': 0, 'sheets_removed': 0}
 
     suffix = 'V1' if mode == 'with_v1' else ''
-    filename = f"survey_{suffix}_corrected.xlsx"
+    filename = f"{base_name}_{suffix}_corrected.xlsx" if suffix else f"{base_name}_corrected.xlsx"
     save_path = out_path / filename
 
     try:
@@ -84,12 +110,12 @@ def save_survey_with_corrections(survey_data, output_dir, mode, correction_file,
         raise ValueError(f"Ошибка открытия файла вариаций: {e}")
 
     sheets_to_save = {}
-    correction_cache = {}   # dict для кеширования
+    correction_cache = {}
 
     for sheet_name, df in survey_data.items():
         # Определяем лист вариаций
         if len(sheet_name) >= 6:
-            date_prefix = sheet_name[:6]          # YYMMDD
+            date_prefix = sheet_name[:6]
             year_s = "20" + date_prefix[0:2]
             month_s = date_prefix[2:4]
             day_s = date_prefix[4:6]
@@ -99,6 +125,9 @@ def save_survey_with_corrections(survey_data, output_dir, mode, correction_file,
 
         if corr_sheet not in available_sheets:
             print(f"Для листа {sheet_name} лист вариаций '{corr_sheet}' не найден.")
+            # Всё равно сохраняем лист без вариаций
+            stats['total_rows'] += len(df)
+            sheets_to_save[sheet_name] = df.copy()
             continue
 
         # Получаем словарь вариаций (из кеша или читаем)
@@ -109,6 +138,8 @@ def save_survey_with_corrections(survey_data, output_dir, mode, correction_file,
                 correction_cache[corr_sheet] = var_dict
             except Exception as e:
                 print(f"Ошибка чтения листа вариаций '{corr_sheet}': {e}")
+                stats['total_rows'] += len(df)
+                sheets_to_save[sheet_name] = df.copy()
                 continue
         else:
             var_dict = correction_cache[corr_sheet]
@@ -119,7 +150,8 @@ def save_survey_with_corrections(survey_data, output_dir, mode, correction_file,
 
         if keep_only_matched:
             before = len(df_result)
-            df_result = df_result.dropna(subset=['var'])
+            if 'var' in df_result.columns:
+                df_result = df_result.dropna(subset=['var'])
             if 'X' in df_result.columns and 'Y' in df_result.columns:
                 df_result = df_result.dropna(subset=['X', 'Y'])
             stats['removed_rows'] += before - len(df_result)
@@ -134,19 +166,27 @@ def save_survey_with_corrections(survey_data, output_dir, mode, correction_file,
             for sh_name, sh_df in sheets_to_save.items():
                 sh_df.to_excel(writer, sheet_name=sh_name, index=False)
 
-    return stats
+    return stats, sheets_to_save
 
 
-def save_filtered_survey(survey_data, output_dir, mode):
+def save_filtered_survey(survey_data, output_dir, mode, base_name="survey"):
     """
     Удаляет строки без вариации (var) и без координат (X, Y), сохраняет результат.
-    Возвращает статистику с ключами: total_rows, after_rows, removed_rows, sheets_removed.
+    
+    Args:
+        survey_data: словарь {sheet_name: DataFrame}
+        output_dir: папка для сохранения
+        mode: 'with_v1', 'without_v1', 'excel'
+        base_name: базовое имя файла
+    
+    Returns:
+        tuple: (статистика, отфильтрованные данные)
     """
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
     suffix = 'V1' if mode == 'with_v1' else ''
-    filename = f"survey_{suffix}_filtered.xlsx"
+    filename = f"{base_name}_{suffix}_filtered.xlsx" if suffix else f"{base_name}_filtered.xlsx"
     save_path = out_path / filename
 
     sheets_to_save = {}
@@ -186,4 +226,4 @@ def save_filtered_survey(survey_data, output_dir, mode):
             for sh_name, sh_df in sheets_to_save.items():
                 sh_df.to_excel(writer, sheet_name=sh_name, index=False)
 
-    return stats
+    return stats, sheets_to_save

@@ -60,10 +60,14 @@ class DataLoaders:
                 for sheet_name in xl.sheet_names:
                     df = xl.parse(sheet_name)
                     df.columns = df.columns.str.strip().str.lower()
-                    rows = len(df)
-                    total_rows += rows
+                    # Преобразуем координатные столбцы в числа (без переименования)
+                    for col in df.columns:
+                        if col in ('lon', 'x', 'lat', 'y'):
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
                     sheets[sheet_name] = df
+                    
                 self.mw.survey_data = sheets
+                self.mw._cache_original()          # <-- сохраняем оригинал для левой карты
                 self.mw.errors = []
                 stats = {'sheets': len(sheets), 'files': 1, 'errors': []}
                 self.mw.master.after(0, self._update_survey_preview, sheets, stats)
@@ -96,10 +100,10 @@ class DataLoaders:
         # Активируем кнопки
         self.mw.assign_btn.config(state=tk.NORMAL)
         self.mw.correct_btn.config(state=tk.NORMAL)
-        self.mw.remove_empty_btn.config(state=tk.NORMAL)
         self.mw.show_errors_btn.config(state=tk.NORMAL)
         self.mw.show_stats_btn.config(state=tk.NORMAL)
 
+        self.mw._cache_original()
         msg = f"Съёмка загружена. Листов: {len(data)}, всего строк: {total_rows}"
         if stats['errors']:
             msg += f"\nОшибок: {len(stats['errors'])}"

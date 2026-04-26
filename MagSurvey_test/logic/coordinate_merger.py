@@ -27,8 +27,8 @@ def parse_navigation_text(text):
     df.columns = df.columns.str.lower().str.strip()
     # Поиск столбцов времени, X, Y
     time_col = next((c for c in df.columns if 'time' in c or 'время' in c), df.columns[0])
-    x_col = next((c for c in df.columns if c in ('x','coord_x','lon','longitude')), df.columns[1])
-    y_col = next((c for c in df.columns if c in ('y','coord_y','lat','latitude')), df.columns[2])
+    x_col = next((c for c in df.columns if c in ('x','coord_x','lon','longitude')), df.columns[2])
+    y_col = next((c for c in df.columns if c in ('y','coord_y','lat','latitude')), df.columns[1])
     df['time_norm'] = df[time_col].apply(normalize_time)
     coord_dict = {row['time_norm']: (row[x_col], row[y_col]) for _, row in df.iterrows()}
     return coord_dict

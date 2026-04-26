@@ -17,18 +17,22 @@ class MapManager:
         all_lon, all_lat = [], []
         for df in survey_data.values():
             if 'lon' in df.columns and 'lat' in df.columns:
-                all_lon.extend(pd.to_numeric(df['lon'], errors='coerce').dropna())
-                all_lat.extend(pd.to_numeric(df['lat'], errors='coerce').dropna())
+                lon = pd.to_numeric(df['lon'], errors='coerce').dropna()
+                lat = pd.to_numeric(df['lat'], errors='coerce').dropna()
+                if len(lon) > 0:
+                    all_lon.extend(lon)
+                    all_lat.extend(lat)
         if all_lon:
             ax.plot(all_lon, all_lat, 'b.', markersize=1, linestyle='None')
             ax.set_xlabel('Долгота', fontsize=8)
             ax.set_ylabel('Широта', fontsize=8)
             ax.set_title(f'Трек съёмки (точек: {len(all_lon)})', fontsize=9)
             ax.tick_params(axis='both', labelsize=7)
+            ax.ticklabel_format(useOffset=False, style='plain')   # ← отключаем смещение
             ax.grid(True)
             ax.figure.tight_layout()
         else:
-            ax.text(0.5, 0.5, 'Нет координат', ha='center', va='center', transform=ax.transAxes)
+            ax.text(0.5, 0.5, 'В данных нет координат', ha='center', va='center', transform=ax.transAxes)
 
     @staticmethod
     def draw_nav_track(ax, nav_coords_cache):
@@ -46,10 +50,36 @@ class MapManager:
             ax.set_ylabel('Широта', fontsize=8)
             ax.set_title(f'Навигация (точек: {len(all_lon)})', fontsize=9)
             ax.tick_params(axis='both', labelsize=7)
+            ax.ticklabel_format(useOffset=False, style='plain')   # ← отключаем смещение
             ax.grid(True)
         else:
             ax.text(0.5, 0.5, 'Не удалось извлечь координаты', ha='center', va='center', transform=ax.transAxes)
         ax.figure.tight_layout()
+
+    @staticmethod
+    def draw_assigned_track(ax, survey_data):
+        """Рисует трек по присвоенным координатам X/Y."""
+        if not survey_data:
+            ax.text(0.5, 0.5, 'Нет данных', ha='center', va='center', transform=ax.transAxes)
+            return
+        all_x, all_y = [], []
+        for df in survey_data.values():
+            if 'X' in df.columns and 'Y' in df.columns:
+                x_vals = pd.to_numeric(df['X'], errors='coerce').dropna()
+                y_vals = pd.to_numeric(df['Y'], errors='coerce').dropna()
+                all_x.extend(x_vals)
+                all_y.extend(y_vals)
+        if all_x:
+            ax.plot(all_x, all_y, 'g.', markersize=1, linestyle='None')
+            ax.set_xlabel('X', fontsize=8)
+            ax.set_ylabel('Y', fontsize=8)
+            ax.set_title(f'Присвоенные координаты (точек: {len(all_x)})', fontsize=9)
+            ax.tick_params(axis='both', labelsize=7)
+            ax.ticklabel_format(useOffset=False, style='plain')
+            ax.grid(True)
+            ax.figure.tight_layout()
+        else:
+            ax.text(0.5, 0.5, 'Нет координат', ha='center', va='center', transform=ax.transAxes)
 
     @staticmethod
     def create_interactive_survey_map(parent, survey_data, output_dir):
@@ -70,6 +100,7 @@ class MapManager:
         fig = Figure(figsize=(9, 7), dpi=100)
         ax = fig.add_subplot(111)
         draw_func(ax, data)
+        ax.ticklabel_format(useOffset=False, style='plain')
 
         canvas = FigureCanvasTkAgg(fig, master=win)
         canvas.draw()
@@ -78,11 +109,17 @@ class MapManager:
         top_frame = ttk.Frame(win)
         top_frame.pack(side=tk.TOP, fill=tk.X)
 
+        if enable_polygon:
+            hint_label = ttk.Label(top_frame, text="Замкните полигон и нажмите Enter для сохранения", foreground='gray')
+            hint_label.pack(side=tk.TOP, anchor='e', padx=10, pady=(5,0))
+
         toolbar = NavigationToolbar2Tk(canvas, top_frame)
         toolbar.update()
         toolbar.pack(side=tk.LEFT)
 
+
         # В _create_window после toolbar.pack(side=tk.LEFT) добавьте разделитель и кнопку справа
+        polygon_tool = None
         if enable_polygon:
             # Гибкий spacer, чтобы прижать кнопку вправо
             ttk.Frame(top_frame).pack(side=tk.LEFT, fill=tk.X, expand=True)

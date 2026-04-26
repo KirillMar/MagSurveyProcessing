@@ -2,14 +2,11 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 import threading
-from pathlib import Path
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import pandas as pd
 from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from gui.loading_overlay import LoadingOverlay
-from logic.survey_processor import process_survey_folder
-from logic.navigation_processor import process_navigation_folder
 from logic.excel_writer import save_survey_excels, save_survey_with_corrections, save_filtered_survey
 from logic.coordinate_merger import parse_navigation_text, add_coordinates_to_df
 from gui.map_manager import MapManager
@@ -29,11 +26,13 @@ class MainWindow:
         self.nav_map_figure = None
         self.nav_map_canvas = None
         self.nav_coords_cache = None
+
         self.survey_path = tk.StringVar()
         self.nav_path = tk.StringVar()
         self.correction_file = tk.StringVar()
         self.mode = tk.StringVar(value="with_v1")
-        self.survey_data = None
+        self.survey_data = None               # обработанные данные (присвоенные координаты)
+        self.survey_data_original = None      # исходные данные с lon/lat
         self.nav_data = None
         self.output_dir = tk.StringVar()
         self.coordinates_assigned = False
@@ -47,6 +46,9 @@ class MainWindow:
         self.data_loaders = DataLoaders(self)
         self.create_widgets()
 
+        # Восстановление оверлея при разворачивании окна
+        self.master.bind("<Map>", self._on_window_map)
+
     def create_widgets(self):
         # Выходная папка
         frame_output = ttk.Frame(self.master)
@@ -54,7 +56,8 @@ class MainWindow:
         ttk.Label(frame_output, text="Папка для сохранения:").pack(side=tk.LEFT)
         ttk.Entry(frame_output, textvariable=self.output_dir, width=60).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_output, text="Обзор...", command=self.browse_output).pack(side=tk.LEFT)
-        ttk.Button(frame_output, text="📁", width=3, command=lambda: open_folder(self.output_dir.get())).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_output, text="📁", width=3,
+                   command=lambda: open_folder(self.output_dir.get())).pack(side=tk.LEFT, padx=2)
 
         # Источники данных
         frame_paths = ttk.LabelFrame(self.master, text="Источники данных", padding=10)
@@ -74,7 +77,8 @@ class MainWindow:
         entry_frame1.grid(row=1, column=1, sticky='ew', pady=2)
         ttk.Entry(entry_frame1, textvariable=self.survey_path, width=45).pack(side=tk.LEFT, padx=5)
         ttk.Button(entry_frame1, text="Обзор...", command=self.browse_survey).pack(side=tk.LEFT)
-        ttk.Button(entry_frame1, text="📁", width=3, command=lambda: open_folder(self.survey_path.get())).pack(side=tk.LEFT, padx=2)
+        ttk.Button(entry_frame1, text="📁", width=3,
+                   command=lambda: open_folder(self.survey_path.get())).pack(side=tk.LEFT, padx=2)
 
         # Папка навигации
         ttk.Label(frame_paths, text="Папка с данными навигации:").grid(row=2, column=0, sticky='w', padx=(0, 10), pady=2)
@@ -82,7 +86,8 @@ class MainWindow:
         entry_frame2.grid(row=2, column=1, sticky='ew', pady=2)
         ttk.Entry(entry_frame2, textvariable=self.nav_path, width=45).pack(side=tk.LEFT, padx=5)
         ttk.Button(entry_frame2, text="Обзор...", command=self.browse_navigation).pack(side=tk.LEFT)
-        ttk.Button(entry_frame2, text="📁", width=3, command=lambda: open_folder(self.nav_path.get())).pack(side=tk.LEFT, padx=2)
+        ttk.Button(entry_frame2, text="📁", width=3,
+                   command=lambda: open_folder(self.nav_path.get())).pack(side=tk.LEFT, padx=2)
 
         # Файл вариаций
         ttk.Label(frame_paths, text="Файл вариаций (Excel):").grid(row=3, column=0, sticky='w', padx=(0, 10), pady=2)
@@ -108,7 +113,7 @@ class MainWindow:
         self.survey_map_canvas.mpl_connect('button_press_event', self.on_survey_map_click)
         survey_map_frame.bind("<Configure>", self._on_survey_map_resize)
 
-        nav_map_frame = ttk.LabelFrame(maps_container, text="Навигационные точки (кликните для увеличения)", padding=5)
+        nav_map_frame = ttk.LabelFrame(maps_container, text="Присвоенные координаты (кликните для увеличения)", padding=5)
         nav_map_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         nav_map_frame.pack_propagate(False)
         self.nav_map_figure = Figure(figsize=(5, 3), dpi=100)
@@ -123,18 +128,20 @@ class MainWindow:
 
         actions_left = ttk.Frame(bottom_frame)
         actions_left.pack(side=tk.LEFT)
-        self.assign_btn = ttk.Button(actions_left, text="Присвоить координаты", command=self.process_with_coordinates, state=tk.DISABLED)
+        self.assign_btn = ttk.Button(actions_left, text="Присвоить координаты",
+                                     command=self.process_with_coordinates, state=tk.DISABLED)
         self.assign_btn.pack(side=tk.LEFT, padx=5)
-        self.correct_btn = ttk.Button(actions_left, text="Ввод поправок", command=self.process_corrections, state=tk.DISABLED)
+        self.correct_btn = ttk.Button(actions_left, text="Ввод поправок",
+                                      command=self.process_corrections, state=tk.DISABLED)
         self.correct_btn.pack(side=tk.LEFT, padx=5)
-        self.remove_empty_btn = ttk.Button(actions_left, text="Удалить строки без координат", command=self.remove_empty_rows, state=tk.DISABLED)
-        self.remove_empty_btn.pack(side=tk.LEFT, padx=5)
 
         actions_right = ttk.Frame(bottom_frame)
         actions_right.pack(side=tk.RIGHT)
-        self.show_errors_btn = ttk.Button(actions_right, text="Показать ошибки", command=self.show_errors, state=tk.DISABLED)
+        self.show_errors_btn = ttk.Button(actions_right, text="Показать ошибки",
+                                          command=self.show_errors, state=tk.NORMAL)
+        self.show_stats_btn = ttk.Button(actions_right, text="Показать статистику",
+                                         command=self.show_all_statistics, state=tk.NORMAL)
         self.show_errors_btn.pack(side=tk.RIGHT, padx=5)
-        self.show_stats_btn = ttk.Button(actions_right, text="Показать статистику", command=self.show_all_statistics, state=tk.DISABLED)
         self.show_stats_btn.pack(side=tk.RIGHT, padx=5)
 
     # ---------------------------------------------------------------------
@@ -148,6 +155,13 @@ class MainWindow:
         if self.loading_overlay_shown:
             self.loading_overlay_shown = False
             self.loading_overlay.hide()
+
+    def _on_window_map(self, event):
+        """Восстанавливает оверлей, если он был показан."""
+        if self.loading_overlay_shown:
+            self.loading_overlay.show()
+            if self.loading_overlay.overlay:
+                self.loading_overlay._place_overlay()
 
     # ---------------------------------------------------------------------
     # Выбор путей
@@ -191,11 +205,21 @@ class MainWindow:
     # ---------------------------------------------------------------------
     # Мини-карты
     def on_survey_map_click(self, event):
-        if self.survey_data:
-            MapManager.create_interactive_survey_map(self.master, self.survey_data, self.output_dir.get())
+        """Открыть интерактивную карту исходного трека."""
+        if self.survey_data_original:
+            MapManager.create_interactive_survey_map(self.master, self.survey_data_original, self.output_dir.get())
 
     def on_nav_map_click(self, event):
-        if self.nav_data:
+        if self.coordinates_assigned and self.survey_data:
+            MapManager._create_window(
+                self.master,
+                "Присвоенные координаты",
+                MapManager.draw_assigned_track,
+                self.survey_data,
+                self.output_dir.get(),
+                enable_polygon=True
+            )
+        elif self.nav_coords_cache:
             MapManager.create_interactive_nav_map(self.master, self.nav_coords_cache)
 
     def _on_survey_map_resize(self, event):
@@ -216,6 +240,12 @@ class MainWindow:
         self.nav_map_canvas.get_tk_widget().update_idletasks()
         self.nav_map_canvas.draw_idle()
 
+    def _cache_original(self):
+        """Сохраняет копию survey_data в survey_data_original."""
+        if self.survey_data:
+            self.survey_data_original = {
+                sheet: df.copy() for sheet, df in self.survey_data.items()
+            }
     # ---------------------------------------------------------------------
     # Обработка данных
     def _has_coordinates(self):
@@ -241,47 +271,105 @@ class MainWindow:
                                        "В файле уже есть столбцы X и Y.\nПерезаписать их? (предыдущие значения будут потеряны)"):
                 return
 
-        self.show_loading("Присвоение координат...")
-        self.master.update()
+        self.show_loading("Присвоение координат и удаление пустых строк...")
+        self.master.after(100, lambda: threading.Thread(target=self._process_coord_task, daemon=True).start())
 
-        def task():
-            try:
-                coord_folder = Path(self.output_dir.get())
-                stats_filtered = save_survey_excels(self.survey_data, str(coord_folder), self.mode.get(),
-                                                    nav_data=self.nav_data, keep_only_matched=False)
-                for sheet_name, df in self.survey_data.items():
-                    if len(sheet_name) >= 6:
-                        date_prefix = sheet_name[:6]
-                        year = "20" + date_prefix[0:2]
-                        month = date_prefix[2:4]
-                        day = date_prefix[4:6]
-                        nav_key_full = year + month + day
-                        nav_text = self.nav_data.get(nav_key_full) or self.nav_data.get(date_prefix)
-                    else:
-                        nav_text = self.nav_data.get(sheet_name)
-                    if nav_text:
-                        try:
-                            coord_dict = parse_navigation_text(nav_text)
-                            self.survey_data[sheet_name] = add_coordinates_to_df(df, coord_dict)
-                        except Exception as e:
-                            print(f"Не удалось добавить координаты в {sheet_name}: {e}")
-                self.coordinates_assigned = True
-                msg = (f"Координаты присвоены.\n"
-                       f"Всего строк: {stats_filtered['total_rows']}\n"
-                       f"Строк с координатами: {stats_filtered['matched_rows']}\n"
-                       f"Удалено строк без координат: {stats_filtered['removed_rows']}\n"
-                       f"Удалено пустых листов: {stats_filtered['sheets_removed']}\n"
-                       f"Файл сохранён: {coord_folder}")
-                self._add_statistics(msg)
-                self.master.after(0, lambda: self.correct_btn.config(state=tk.NORMAL))
-                self.master.after(0, lambda: self.remove_empty_btn.config(state=tk.NORMAL))
-                self.master.after(0, messagebox.showinfo, "Готово", msg)
-            except Exception as e:
-                self.master.after(0, messagebox.showerror, "Ошибка", str(e))
-            finally:
-                self.master.after(0, self.hide_loading)
+    def _process_coord_task(self):
+        try:
+            coord_folder = Path(self.output_dir.get())
 
-        threading.Thread(target=task, daemon=True).start()
+            # 1. Сохраняем исходные данные, если ещё не сохранены
+            if self.survey_data_original is None:
+                self.survey_data_original = {
+                    sheet: df.copy() for sheet, df in self.survey_data.items()
+                }
+
+            # 2. Присвоение координат
+            stats_coord = save_survey_excels(
+                self.survey_data, str(coord_folder), self.mode.get(),
+                nav_data=self.nav_data, keep_only_matched=False,
+                base_name=self._get_base_name()
+            )
+            for sheet_name, df in list(self.survey_data.items()):
+                nav_text = self._get_nav_text(sheet_name)
+                if nav_text:
+                    try:
+                        coord_dict = parse_navigation_text(nav_text)
+                        self.survey_data[sheet_name] = add_coordinates_to_df(df, coord_dict)
+                    except Exception as e:
+                        print(f"Не удалось добавить координаты в {sheet_name}: {e}")
+
+            # 3. Удаление строк без координат
+            stats_filtered, _ = save_filtered_survey(
+                self.survey_data, str(coord_folder), self.mode.get(),
+                base_name=self._get_base_name()
+            )
+            self.coordinates_assigned = True
+
+            # 4. Загружаем из итогового файла и переименовываем X->lon, Y->lat для карты
+            filtered_file = coord_folder / f"{self._get_base_name()}_{'V1' if self.mode.get() == 'with_v1' else ''}_filtered.xlsx"
+            if filtered_file.exists():
+                xl = pd.ExcelFile(filtered_file)
+                new_data = {}
+                for sheet in xl.sheet_names:
+                    df = xl.parse(sheet)
+                    
+                    for col in df.columns:
+                        if col.lower() in ('lon', 'x', 'lat', 'y'):
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+                    new_data[sheet] = df
+                self.survey_data = new_data
+
+            msg = (f"Координаты присвоены, пустые строки удалены.\n"
+                   f"Всего строк после присвоения: {stats_coord['total_rows']}\n"
+                   f"Строк с координатами: {stats_coord['matched_rows']}\n"
+                   f"Удалено пустых листов (этап координат): {stats_coord['sheets_removed']}\n"
+                   f"---\n"
+                   f"После фильтрации пустых строк:\n"
+                   f"Оставлено строк: {stats_filtered['after_rows']}\n"
+                   f"Удалено строк без координат: {stats_filtered['removed_rows']}\n"
+                   f"Удалено пустых листов: {stats_filtered['sheets_removed']}\n"
+                   f"Файлы сохранены в: {coord_folder}")
+
+            self._add_statistics(msg)
+            self.master.after(0, lambda: self.correct_btn.config(state=tk.NORMAL))
+            self.master.after(0, self._update_nav_map)
+            self.master.after(0, lambda: messagebox.showinfo("Готово", msg))
+        except Exception as e:
+            self.master.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
+        finally:
+            self.master.after(0, self.hide_loading)
+
+    def _update_nav_map(self):
+        if not self.nav_map_figure:
+            return
+        self.nav_map_figure.clear()
+        ax = self.nav_map_figure.add_subplot(111)
+
+        all_x, all_y = [], []
+        if self.survey_data:
+            for df in self.survey_data.values():
+                if 'X' in df.columns:
+                    all_x.extend(pd.to_numeric(df['X'], errors='coerce').dropna())
+                    all_y.extend(pd.to_numeric(df['Y'], errors='coerce').dropna())
+                elif 'lon' in df.columns:
+                    all_x.extend(pd.to_numeric(df['lon'], errors='coerce').dropna())
+                    all_y.extend(pd.to_numeric(df['lat'], errors='coerce').dropna())
+
+        if all_x:
+            ax.plot(all_x, all_y, 'g.', markersize=1, linestyle='None')
+            ax.set_xlabel('X', fontsize=8)
+            ax.set_ylabel('Y', fontsize=8)
+            ax.set_title(f'Присвоенные координаты (точек: {len(all_x)})', fontsize=9)
+            ax.ticklabel_format(useOffset=False, style='plain')
+            ax.tick_params(axis='both', labelsize=7)
+            ax.grid(True)
+        else:
+            ax.text(0.5, 0.5, 'Нет присвоенных координат', ha='center', va='center',
+                    transform=ax.transAxes)
+        ax.figure.tight_layout()
+        self.nav_map_canvas.draw_idle()
 
     def process_corrections(self):
         if not self.survey_data:
@@ -298,65 +386,80 @@ class MainWindow:
             return
 
         self.show_loading("Ввод поправок...")
-        self.master.update()
+        self.master.after(100, lambda: threading.Thread(target=self._process_corr_task, daemon=True).start())
 
-        def task():
-            try:
-                corr_folder = Path(self.output_dir.get())
-                # пусть функция возвращает кортеж (статистика, обновлённые данные)
-                stats_filtered, corrected_data = save_survey_with_corrections(
-                    self.survey_data, str(corr_folder),
-                    self.mode.get(), self.correction_file.get(),
-                    keep_only_matched=False
-                )
-                self.survey_data = corrected_data          # ← обновляем данные в памяти
-                self.master.after(0, lambda: self.remove_empty_btn.config(state=tk.NORMAL))
-                msg = (f"Поправки применены.\n"
-                    f"Всего строк: {stats_filtered['total_rows']}\n"
-                    f"Строк с вариацией: {stats_filtered['matched_rows']}\n"
-                    f"Удалено строк без вариации: {stats_filtered['removed_rows']}\n"
-                    f"Удалено пустых листов: {stats_filtered['sheets_removed']}\n"
-                    f"Файлы сохранены в: {corr_folder}")
-                self._add_statistics(msg)
-                self.master.after(0, messagebox.showinfo, "Готово", msg)
-            except Exception as e:
-                self.master.after(0, messagebox.showerror, "Ошибка", str(e))
-            finally:
-                self.master.after(0, self.hide_loading)
+    def _process_corr_task(self):
+        try:
+            corr_folder = Path(self.output_dir.get())
 
-        threading.Thread(target=task, daemon=True).start()
+            # Загружаем отфильтрованные данные (_filtered), если есть
+            filtered_file = corr_folder / f"{self._get_base_name()}_{'V1' if self.mode.get() == 'with_v1' else ''}_filtered.xlsx"
+            if filtered_file.exists():
+                xl = pd.ExcelFile(filtered_file)
+                filtered_data = {}
+                for sheet in xl.sheet_names:
+                    df = xl.parse(sheet)
+                    # Приводим координаты к числам
+                    for col in df.columns:
+                        if col.lower() in ('lon', 'x', 'lat', 'y'):
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                    filtered_data[sheet] = df
+            else:
+                # На случай, если filtered ещё не создан
+                filtered_data = self.survey_data
 
-    def remove_empty_rows(self):
-        if not self.survey_data:
-            messagebox.showwarning("Предупреждение", "Нет данных")
-            return
-        if not self.output_dir.get():
-            messagebox.showwarning("Предупреждение", "Выберите папку для сохранения")
-            return
+            # Применяем поправки к отфильтрованным данным
+            stats_filtered, corrected_data = save_survey_with_corrections(
+                filtered_data,
+                str(corr_folder),
+                self.mode.get(),
+                self.correction_file.get(),
+                keep_only_matched=True,
+                base_name=self._get_base_name()
+            )
 
-        self.show_loading("Удаление пустых строк...")
-        self.master.update()
+            # Обновляем данные для правой мини-карты
+            self.survey_data = corrected_data
 
-        def task():
-            try:
-                out_folder = Path(self.output_dir.get())
-                stats = save_filtered_survey(self.survey_data, str(out_folder), self.mode.get())
-                msg = (f"Пустые строки удалены.\n"
-                       f"Исходных строк: {stats['total_rows']}\n"
-                       f"Оставлено строк: {stats['after_rows']}\n"
-                       f"Удалено строк: {stats['removed_rows']}\n"
-                       f"Удалено пустых листов: {stats['sheets_removed']}\n"
-                       f"Файл сохранён: {out_folder}")
-                self._add_statistics(msg)
-                self.master.after(0, messagebox.showinfo, "Готово", msg)
-            except Exception as e:
-                self.master.after(0, messagebox.showerror, "Ошибка", str(e))
-            finally:
-                self.master.after(0, self.hide_loading)
+            self.master.after(0, self._update_nav_map)
 
-        threading.Thread(target=task, daemon=True).start()
+            msg = (f"Поправки применены.\n"
+                f"Всего строк: {stats_filtered['total_rows']}\n"
+                f"Строк с вариацией: {stats_filtered['matched_rows']}\n"
+                f"Удалено строк без вариации: {stats_filtered['removed_rows']}\n"
+                f"Удалено пустых листов: {stats_filtered['sheets_removed']}\n"
+                f"Файлы сохранены в: {corr_folder}")
 
-        # ---------------------------------------------------------------------
+            self._add_statistics(msg)
+            self.master.after(0, lambda: messagebox.showinfo("Готово", msg))
+        except Exception as e:
+            self.master.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
+        finally:
+            self.master.after(0, self.hide_loading)
+
+    # ---------------------------------------------------------------------
+    # Вспомогательные методы
+    def _get_nav_text(self, sheet_name):
+        """Возвращает текст навигации для указанного листа."""
+        if not self.nav_data:
+            return None
+        if len(sheet_name) >= 6:
+            date_prefix = sheet_name[:6]
+            year = "20" + date_prefix[0:2]
+            month = date_prefix[2:4]
+            day = date_prefix[4:6]
+            nav_key_full = year + month + day
+            return self.nav_data.get(nav_key_full) or self.nav_data.get(date_prefix)
+        else:
+            return self.nav_data.get(sheet_name)
+
+    def _get_base_name(self):
+        """Базовое имя файла в зависимости от режима."""
+        if self.mode.get() == "excel":
+            return Path(self.survey_path.get()).stem
+        return "survey"
+
+    # ---------------------------------------------------------------------
     # Статистика и ошибки
     def _add_statistics(self, message):
         self.statistics_history.append(message)
