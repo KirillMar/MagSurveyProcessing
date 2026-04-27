@@ -1,3 +1,5 @@
+from tkinter import messagebox
+
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
@@ -6,7 +8,7 @@ from tkinter import ttk
 import pandas as pd
 import numpy as np
 
-from gui.polygon_tool import PolygonTool
+from gui.components.polygon_tool import PolygonTool
 
 class MapManager:
     @staticmethod
@@ -56,22 +58,28 @@ class MapManager:
 
     @staticmethod
     def draw_assigned_track(ax, survey_data):
-        """Рисует трек по присвоенным координатам X/Y."""
         if not survey_data:
             ax.text(0.5, 0.5, 'Нет данных', ha='center', va='center', transform=ax.transAxes)
             return
         all_x, all_y = [], []
         for df in survey_data.values():
-            if 'X' in df.columns and 'Y' in df.columns:
-                x_vals = pd.to_numeric(df['X'], errors='coerce').dropna()
-                y_vals = pd.to_numeric(df['Y'], errors='coerce').dropna()
+            xcol = ycol = None
+            for col in df.columns:
+                cl = col.lower()
+                if cl in ('x', 'lon'):
+                    xcol = col
+                elif cl in ('y', 'lat'):
+                    ycol = col
+            if xcol and ycol:
+                x_vals = pd.to_numeric(df[xcol], errors='coerce').dropna()
+                y_vals = pd.to_numeric(df[ycol], errors='coerce').dropna()
                 all_x.extend(x_vals)
                 all_y.extend(y_vals)
         if all_x:
             ax.plot(all_x, all_y, 'g.', markersize=1, linestyle='None')
-            ax.set_xlabel('X', fontsize=8)
-            ax.set_ylabel('Y', fontsize=8)
-            ax.set_title(f'Присвоенные координаты (точек: {len(all_x)})', fontsize=9)
+            ax.set_xlabel('X' if any('x' in c.lower() for df in survey_data.values() for c in df.columns) else 'Долгота', fontsize=8)
+            ax.set_ylabel('Y' if any('y' in c.lower() for df in survey_data.values() for c in df.columns) else 'Широта', fontsize=8)
+            ax.set_title(f'Координаты (точек: {len(all_x)})', fontsize=9)
             ax.tick_params(axis='both', labelsize=7)
             ax.ticklabel_format(useOffset=False, style='plain')
             ax.grid(True)
@@ -91,7 +99,7 @@ class MapManager:
 
     @staticmethod
     def _create_window(parent, title, draw_func, data, output_dir, enable_polygon):
-        win = tk.Toplevel(parent)
+        win = tk.Toplevel(parent.master)
         win.title(title)
         win.geometry("900x700")
 
@@ -121,9 +129,21 @@ class MapManager:
         if enable_polygon:
             # Гибкий spacer, чтобы прижать кнопку вправо
             ttk.Frame(top_frame).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            load_polygon_btn = ttk.Button(top_frame, text="Загрузить полигон",
+                                        command=lambda: messagebox.showinfo("В разработке",
+                                      "Функция загрузки полигона находится в разработке.",
+                                      parent=win))
+            load_polygon_btn.pack(side=tk.RIGHT, padx=5)
 
-            polygon_tool = PolygonTool(ax, canvas, data, output_dir, main_window=parent if hasattr(parent, "_add_statistics") else None)
+            polygon_tool = PolygonTool(ax, canvas, data, output_dir, main_window=parent)
             btn_text = tk.StringVar(value="Выделить полигон")
+
+            def on_polygon_deactivate():
+                btn_text.set("Выделить полигон")
+
+            polygon_tool = PolygonTool(ax, canvas, data, output_dir,
+                                    main_window=parent,
+                                    on_deactivate=on_polygon_deactivate)
 
             def toggle_polygon():
                 if polygon_tool.active:

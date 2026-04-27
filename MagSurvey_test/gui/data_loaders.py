@@ -4,11 +4,11 @@ from pathlib import Path
 import pandas as pd
 from tkinter import messagebox
 
-from logic.survey_processor import process_survey_folder
-from logic.navigation_processor import process_navigation_folder
+from logic.data_import import process_survey_folder
+from logic.data_import import process_navigation_folder
 from logic.excel_writer import save_survey_excels
 from logic.coordinate_merger import parse_navigation_text
-from gui.map_manager import MapManager
+from gui.components.map_manager import MapManager
 
 
 class DataLoaders:
@@ -202,6 +202,8 @@ class DataLoaders:
         # Количество уникальных дат
         unique_dates = var_df['datetime'].dt.date.nunique()
         total_records = len(var_df)
+        stats_msg = f"Вариации загружены: {unique_dates} дат, всего записей {total_records}"
+        self.mw._add_statistics(stats_msg)
         messagebox.showinfo(
             "Вариации загружены",
             f"Файл вариаций обработан.\n"

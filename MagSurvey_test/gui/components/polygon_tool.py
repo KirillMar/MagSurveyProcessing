@@ -4,7 +4,7 @@ from pathlib import Path
 from tkinter import simpledialog, messagebox
 
 class PolygonTool:
-    def __init__(self, ax, canvas, survey_data, output_dir, main_window=None):
+    def __init__(self, ax, canvas, survey_data, output_dir, main_window=None, on_deactivate=None):
         self.ax = ax
         self.canvas = canvas
         self.survey_data = survey_data
@@ -14,6 +14,7 @@ class PolygonTool:
         self.lines = []
         self.polygon_closed = False
         self.scatter_first = None
+        self.on_deactivate = on_deactivate
         self._cid_click = None
         self._cid_key = None
         self.main_window = main_window
@@ -35,6 +36,8 @@ class PolygonTool:
         if self._cid_key:
             self.canvas.mpl_disconnect(self._cid_key)
         self._clear_temp()
+        if self.on_deactivate:
+            self.on_deactivate()
 
     def _clear_temp(self):
         for line in self.lines:
@@ -127,17 +130,36 @@ class PolygonTool:
             return
 
         name = simpledialog.askstring("Имя полигона", "Введите название:",
-                                      parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel())
+                                    parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel())
         if not name:
             return
+
+        out_dir = Path(self.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        filepath = out_dir / f"{name}.xlsx"
+
+        # Проверка перезаписи
+        if filepath.exists():
+            overwrite = messagebox.askyesno(
+                "Файл существует",
+                f"Файл '{name}.xlsx' уже существует.\nПерезаписать его?",
+                parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel()
+            )
+            if not overwrite:
+                new_name = simpledialog.askstring("Новое имя",
+                                                "Введите другое имя:",
+                                                parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel())
+                if not new_name:
+                    return
+                name = new_name
+                filepath = out_dir / f"{name}.xlsx"
 
         polygon_vertices = self.points[:-1]
         filtered = {}
         for sheet, df in self.survey_data.items():
             if 'lon' not in df.columns or 'lat' not in df.columns:
                 continue
-            coords = df[['lon', 'lat']].values
-            mask = [self._point_in_polygon(pt, polygon_vertices) for pt in coords]
+            mask = df.apply(lambda r: self._point_in_polygon((r['lon'], r['lat']), polygon_vertices), axis=1)
             fdf = df[mask]
             if not fdf.empty:
                 filtered[sheet] = fdf
@@ -146,35 +168,23 @@ class PolygonTool:
             messagebox.showinfo("Результат", "В полигон не попало ни одной точки.")
             return
 
-        out_dir = Path(self.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        filepath = out_dir / f"{name}.xlsx"
         with pd.ExcelWriter(filepath) as writer:
             for sheet, fdf in filtered.items():
                 fdf.to_excel(writer, sheet_name=sheet, index=False)
 
+        # Статистика
+        if self.main_window:
+            total_points = sum(len(fdf) for fdf in filtered.values())
+            stats_msg = (f"Создан полигон '{name}' в папке {out_dir}\n"
+                        f"Вершин: {len(polygon_vertices)}, точек внутри: {total_points}")
+            self.main_window.master.after(0, lambda: self.main_window._add_statistics(stats_msg))
+
         messagebox.showinfo("Успех", f"Сохранено: {filepath}\nЛистов: {len(filtered)}")
-        # Возвращаем фокус на холст и поднимаем окно
-        self.canvas.get_tk_widget().focus_set()
-        win = self.ax.figure.canvas.get_tk_widget().winfo_toplevel()
-        win.lift()
-        win.focus_force()
+
+        # Закрываем окно карты
         self.deactivate()
-
-        self.canvas.mpl_disconnect(self._cid_click)
-        self.canvas.mpl_disconnect(self._cid_key)
-
-        self.canvas.widgetlock.release(self.canvas)
-        self.canvas.draw_idle()
-
-        if hasattr(self.main_window, "_add_statistics"):
-            stats_msg = (f"Полигон '{name}' сохранён: {filepath}\n"
-                         f"Вершин: {len(polygon_vertices)}, точек внутри: {sum(len(v) for v in filtered.values())}")
-            self.main_window._add_statistics(stats_msg)
-
         win = self.ax.figure.canvas.get_tk_widget().winfo_toplevel()
-        win.after(50, lambda: win.focus_force())
-        win.after(50, lambda: win.grab_release())
+        win.destroy()
 
     @staticmethod
     def _point_in_polygon(point, polygon):

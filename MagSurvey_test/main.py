@@ -1,4 +1,5 @@
 import tkinter as tk
+import sv_ttk
 from gui.main_window import MainWindow
 import sys
 import os

@@ -114,7 +114,6 @@ def save_survey_with_corrections(survey_data, output_dir, mode, var_df,
         with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
             for sh_name, sh_df in sheets_to_save.items():
                 sh_df.to_excel(writer, sheet_name=sh_name, index=False)
-        print(f"✔ Сохранено: {save_path}")
     else:
         print("⚠️ Нет данных для сохранения после коррекции")
 
