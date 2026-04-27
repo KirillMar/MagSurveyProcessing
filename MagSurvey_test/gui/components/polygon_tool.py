@@ -25,6 +25,7 @@ class PolygonTool:
         self.active = True
         self._clear_temp()
         self._cid_click = self.canvas.mpl_connect('button_press_event', self._on_click)
+        self._cid_dblclick = self.canvas.mpl_connect('button_press_event', self._on_dblclick)
         self._cid_key = self.canvas.mpl_connect('key_press_event', self._on_key)
 
     def deactivate(self):
@@ -35,6 +36,8 @@ class PolygonTool:
             self.canvas.mpl_disconnect(self._cid_click)
         if self._cid_key:
             self.canvas.mpl_disconnect(self._cid_key)
+        if hasattr(self, '_cid_dblclick'):
+            self.canvas.mpl_disconnect(self._cid_dblclick)
         self._clear_temp()
         if self.on_deactivate:
             self.on_deactivate()
@@ -49,6 +52,84 @@ class PolygonTool:
         self.points = []
         self.polygon_closed = False
         self.canvas.draw_idle()
+
+    def _on_key(self, event):
+        if event.key == 'enter':
+            if not self.polygon_closed:
+                messagebox.showinfo("Инфо", "Сначала замкните полигон.")
+                return
+            self._save_polygon()
+
+    def _on_dblclick(self, event):
+        if event.dblclick and event.inaxes == self.ax and event.button == 1:
+            x, y = event.xdata, event.ydata
+            if x is not None and y is not None:
+                # Если уже замкнут, игнорируем
+                if self.polygon_closed:
+                    return
+                new_point = (x, y)
+                self.points.append(new_point)
+                # Замыкаем на первую точку
+                self.polygon_closed = True
+                self.points.append(self.points[0])
+                self._redraw()
+                self._save_polygon()
+
+    def _save_polygon(self):
+        name = simpledialog.askstring("Имя полигона", "Введите название:",
+                                    parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel())
+        if not name:
+            return
+
+        out_dir = Path(self.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        filepath = out_dir / f"{name}.xlsx"
+
+        if filepath.exists():
+            overwrite = messagebox.askyesno(
+                "Файл существует",
+                f"Файл '{name}.xlsx' уже существует.\nПерезаписать его?",
+                parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel()
+            )
+            if not overwrite:
+                new_name = simpledialog.askstring("Новое имя",
+                                                "Введите другое имя:",
+                                                parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel())
+                if not new_name:
+                    return
+                name = new_name
+                filepath = out_dir / f"{name}.xlsx"
+
+        polygon_vertices = self.points[:-1]
+        filtered = {}
+        for sheet, df in self.survey_data.items():
+            if 'lon' not in df.columns or 'lat' not in df.columns:
+                continue
+            mask = df.apply(lambda r: self._point_in_polygon((r['lon'], r['lat']), polygon_vertices), axis=1)
+            fdf = df[mask]
+            if not fdf.empty:
+                filtered[sheet] = fdf
+
+        if not filtered:
+            messagebox.showinfo("Результат", "В полигон не попало ни одной точки.")
+            return
+
+        with pd.ExcelWriter(filepath) as writer:
+            for sheet, fdf in filtered.items():
+                fdf.to_excel(writer, sheet_name=sheet, index=False)
+
+        if self.main_window:
+            total_points = sum(len(fdf) for fdf in filtered.values())
+            stats_msg = (f"Создан полигон '{name}' в папке {out_dir}\n"
+                        f"Вершин: {len(polygon_vertices)}, точек внутри: {total_points}")
+            self.main_window.master.after(0, lambda: self.main_window._add_statistics(stats_msg))
+
+        messagebox.showinfo("Успех", f"Сохранено: {filepath}\nЛистов: {len(filtered)}")
+
+        # Закрываем окно карты
+        self.deactivate()
+        win = self.ax.figure.canvas.get_tk_widget().winfo_toplevel()
+        win.destroy()
 
     def _redraw(self):
         for line in self.lines:
@@ -83,7 +164,7 @@ class PolygonTool:
         return np.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
 
     def _adaptive_threshold(self):
-        """Возвращает порог замыкания как 0.5% от среднего диапазона по осям."""
+        """Возвращает порог замыкания как 0.25% от среднего диапазона по осям."""
         xlim = self.ax.get_xlim()
         ylim = self.ax.get_ylim()
         dx = xlim[1] - xlim[0]
@@ -105,6 +186,7 @@ class PolygonTool:
                 self.polygon_closed = True
                 self.points.append(self.points[0])  # замыкающая вершина
                 self._redraw()
+                self._save_polygon()
                 return
 
         if self.polygon_closed:
@@ -121,70 +203,6 @@ class PolygonTool:
             self.canvas.draw_idle()   # ← мгновенное отображение первой точки
         else:
             self._redraw()
-
-    def _on_key(self, event):
-        if event.key != 'enter':
-            return
-        if not self.polygon_closed:
-            messagebox.showinfo("Инфо", "Сначала замкните полигон.")
-            return
-
-        name = simpledialog.askstring("Имя полигона", "Введите название:",
-                                    parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel())
-        if not name:
-            return
-
-        out_dir = Path(self.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        filepath = out_dir / f"{name}.xlsx"
-
-        # Проверка перезаписи
-        if filepath.exists():
-            overwrite = messagebox.askyesno(
-                "Файл существует",
-                f"Файл '{name}.xlsx' уже существует.\nПерезаписать его?",
-                parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel()
-            )
-            if not overwrite:
-                new_name = simpledialog.askstring("Новое имя",
-                                                "Введите другое имя:",
-                                                parent=self.ax.figure.canvas.get_tk_widget().winfo_toplevel())
-                if not new_name:
-                    return
-                name = new_name
-                filepath = out_dir / f"{name}.xlsx"
-
-        polygon_vertices = self.points[:-1]
-        filtered = {}
-        for sheet, df in self.survey_data.items():
-            if 'lon' not in df.columns or 'lat' not in df.columns:
-                continue
-            mask = df.apply(lambda r: self._point_in_polygon((r['lon'], r['lat']), polygon_vertices), axis=1)
-            fdf = df[mask]
-            if not fdf.empty:
-                filtered[sheet] = fdf
-
-        if not filtered:
-            messagebox.showinfo("Результат", "В полигон не попало ни одной точки.")
-            return
-
-        with pd.ExcelWriter(filepath) as writer:
-            for sheet, fdf in filtered.items():
-                fdf.to_excel(writer, sheet_name=sheet, index=False)
-
-        # Статистика
-        if self.main_window:
-            total_points = sum(len(fdf) for fdf in filtered.values())
-            stats_msg = (f"Создан полигон '{name}' в папке {out_dir}\n"
-                        f"Вершин: {len(polygon_vertices)}, точек внутри: {total_points}")
-            self.main_window.master.after(0, lambda: self.main_window._add_statistics(stats_msg))
-
-        messagebox.showinfo("Успех", f"Сохранено: {filepath}\nЛистов: {len(filtered)}")
-
-        # Закрываем окно карты
-        self.deactivate()
-        win = self.ax.figure.canvas.get_tk_widget().winfo_toplevel()
-        win.destroy()
 
     @staticmethod
     def _point_in_polygon(point, polygon):

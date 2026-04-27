@@ -1,8 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
+from matplotlib import style
 import sv_ttk
 import threading
+import matplotlib as mpl
 import pandas as pd
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -28,7 +30,7 @@ class MainWindow:
         self.nav_map_canvas = None
         self.nav_coords_cache = None
         self.var_df = None
-        self.dark_theme = False
+        self.dark_theme = True
         self.survey_data_corrected = None
 
         self.survey_path = tk.StringVar()
@@ -56,6 +58,7 @@ class MainWindow:
 
         self.create_widgets()
         self.master.bind("<Map>", self._on_window_map)
+        self.toggle_theme()     # применит светлую тему и стили
 
     def create_widgets(self):
         # Выходная папка
@@ -271,24 +274,49 @@ class MainWindow:
     
     def toggle_theme(self):
         self.dark_theme = not self.dark_theme
+        import matplotlib.pyplot as plt
+
+        # Устанавливаем базовый шрифт ДО переключения темы
+        default_font = ('Segoe UI', 8)
+        self.master.option_add('*Font', default_font)
+
+        # Обновляем фон canvas
+        bg_color = '#2b2b2b' if self.dark_theme else 'white'
+        if self.survey_map_figure:
+            self.survey_map_figure.set_facecolor(bg_color)
+        if self.nav_map_figure:
+            self.nav_map_figure.set_facecolor(bg_color)
+        if self.survey_map_canvas:
+            self.survey_map_canvas.draw_idle()
+        if self.nav_map_canvas:
+            self.nav_map_canvas.draw_idle()
+
         if self.dark_theme:
             sv_ttk.set_theme("dark")
             self.theme_btn.config(text="☀️")
-            # Исправляем шрифт для тёмной темы
-            style = ttk.Style()
-            style.configure('.', font=('Segoe UI', 9))
-            style.configure('TLabel', font=('Segoe UI', 9))
-            style.configure('TButton', font=('Segoe UI', 9))
-            # Для matplotlib
-            import matplotlib.pyplot as plt
             plt.style.use('dark_background')
+            mpl.rcParams['figure.facecolor'] = '#2b2b2b'
         else:
             sv_ttk.set_theme("light")
             self.theme_btn.config(text="🌙")
-            style = ttk.Style()
-            style.configure('.', font=('Segoe UI', 9))
-            import matplotlib.pyplot as plt
             plt.style.use('default')
-        # Обновляем мини-карты (перерисовка с новым стилем)
-        if self.survey_map_canvas:
-            self.mini_maps.update_nav_map()  # заодно перерисует левую и правую
+            mpl.rcParams['figure.facecolor'] = 'white'
+
+        # Явно корректируем стили после применения темы
+        style = ttk.Style()                        # ← сначала создаём
+        style.configure('.', font=default_font)
+        style.configure('TLabel', font=default_font)
+        style.configure('TButton', font=default_font)
+        style.configure('TLabelframe.Label', font=default_font)
+        style.configure('TRadiobutton', font=default_font)
+        style.configure('TEntry', padding=1, relief='solid', borderwidth=1)   # ← теперь можно использовать
+
+        # Обновляем мини-карты
+        if self.survey_map_figure is not None and self.survey_map_canvas is not None:
+            self.survey_map_figure.clear()
+            ax = self.survey_map_figure.add_subplot(111)
+            MapManager.draw_survey_track(ax, self.survey_data_original or self.survey_data)
+            self.survey_map_canvas.draw_idle()
+
+        if self.nav_map_figure is not None and self.nav_map_canvas is not None:
+            self.mini_maps.update_nav_map()

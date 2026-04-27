@@ -10,22 +10,31 @@ class MiniMaps:
         self.mw = main_window  # ссылка на MainWindow
 
     def create_widgets(self, maps_container):
-        # survey_map_frame
-        survey_map_frame = tk.ttk.LabelFrame(maps_container, text="Трек съёмки (кликните для увеличения)", padding=5)
-        survey_map_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        survey_map_frame.pack_propagate(False)
+        # Настраиваем контейнер как grid с двумя равными колонками
+        maps_container.grid_columnconfigure(0, weight=1, uniform='maps')
+        maps_container.grid_columnconfigure(1, weight=1, uniform='maps')
+        maps_container.grid_rowconfigure(0, weight=1)
+
+        # Левая карта
+        survey_map_frame = ttk.LabelFrame(maps_container, text="Трек съёмки (кликните для увеличения)", padding=5)
+        survey_map_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 2))  # маленький отступ справа
+        survey_map_frame.grid_propagate(False)
+
         self.mw.survey_map_figure = Figure(figsize=(5, 3), dpi=100)
         self.mw.survey_map_canvas = FigureCanvasTkAgg(self.mw.survey_map_figure, master=survey_map_frame)
+        self.mw.survey_map_canvas.get_tk_widget().configure(bg='#2b2b2b', highlightthickness=0)
         self.mw.survey_map_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         self.mw.survey_map_canvas.mpl_connect('button_press_event', self.on_survey_map_click)
         survey_map_frame.bind("<Configure>", self._on_survey_map_resize)
 
-        # nav_map_frame
-        nav_map_frame = tk.ttk.LabelFrame(maps_container, text="Присвоенные координаты (кликните для увеличения)", padding=5)
-        nav_map_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        nav_map_frame.pack_propagate(False)
+        # Правая карта
+        nav_map_frame = ttk.LabelFrame(maps_container, text="Присвоенные координаты (кликните для увеличения)", padding=5)
+        nav_map_frame.grid(row=0, column=1, sticky='nsew', padx=(2, 0))  # маленький отступ слева
+        nav_map_frame.grid_propagate(False)
+
         self.mw.nav_map_figure = Figure(figsize=(5, 3), dpi=100)
         self.mw.nav_map_canvas = FigureCanvasTkAgg(self.mw.nav_map_figure, master=nav_map_frame)
+        self.mw.nav_map_canvas.get_tk_widget().configure(bg='#2b2b2b', highlightthickness=0)
         self.mw.nav_map_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         self.mw.nav_map_canvas.mpl_connect('button_press_event', self.on_nav_map_click)
         nav_map_frame.bind("<Configure>", self._on_nav_map_resize)

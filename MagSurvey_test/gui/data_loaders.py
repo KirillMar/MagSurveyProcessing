@@ -95,7 +95,10 @@ class DataLoaders:
             self.mw.survey_map_figure.clear()
             ax = self.mw.survey_map_figure.add_subplot(111)
             MapManager.draw_survey_track(ax, self.mw.survey_data)
+            self.mw.survey_map_figure.tight_layout()
             self.mw.survey_map_canvas.draw()
+            self.mw.survey_map_figure.tight_layout()
+            self.mw.survey_map_canvas.draw_idle()
 
         # Активируем кнопки
         self.mw.assign_btn.config(state=tk.NORMAL)
@@ -164,6 +167,7 @@ class DataLoaders:
             self.mw.nav_map_figure.clear()
             ax = self.mw.nav_map_figure.add_subplot(111)
             MapManager.draw_nav_track(ax, self.mw.nav_coords_cache)
+            self.mw.nav_map_figure.tight_layout()
             self.mw.nav_map_canvas.draw()
 
         msg = f"Навигация загружена. Дат: {len(data)}, всего строк: {total_lines}"
